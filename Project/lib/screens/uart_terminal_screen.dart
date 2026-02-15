@@ -470,51 +470,55 @@ class _UartTerminalScreenState extends State<UartTerminalScreen> {
   }
 
   Widget _buildInputArea() {
-    return Consumer<SerialProvider>(
-      builder: (context, provider, _) {
-        final inputText = _messageController.text;
-        final suggestions = inputText.trim().isNotEmpty
-            ? provider.commandHistory.getSuggestions(inputText)
-            : <String>[];
+    final provider = context.read<SerialProvider>();
+    final inputText = _messageController.text;
+    final suggestions = inputText.trim().isNotEmpty
+        ? provider.commandHistory.getSuggestions(inputText)
+        : <String>[];
 
-        return Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            // Suggestion chips
-            if (suggestions.isNotEmpty)
-              Container(
-                width: double.infinity,
-                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
-                child: Wrap(
-                  spacing: 6,
-                  runSpacing: 4,
-                  children: suggestions.map((cmd) {
-                    final freq = provider.commandHistory.getFrequency(cmd);
-                    return InputChip(
-                      label: Text(
-                        '$cmd ($freq)',
-                        style: const TextStyle(fontSize: 12),
-                      ),
-                      materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                      visualDensity: VisualDensity.compact,
-                      deleteIcon: const Icon(Icons.close, size: 14),
-                      onDeleted: () async {
-                        await provider.commandHistory.deleteCommand(cmd);
-                        setState(() {});
-                      },
-                      onPressed: () {
-                        _messageController.text = cmd;
-                        _messageController.selection = TextSelection.fromPosition(
-                          TextPosition(offset: cmd.length),
-                        );
-                        setState(() {});
-                      },
-                    );
-                  }).toList(),
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        // Suggestion chips — always present in tree to keep structure stable
+        Container(
+          width: double.infinity,
+          padding: suggestions.isNotEmpty
+              ? const EdgeInsets.symmetric(horizontal: 12, vertical: 4)
+              : EdgeInsets.zero,
+          child: Wrap(
+            spacing: 6,
+            runSpacing: 4,
+            children: suggestions.map((cmd) {
+              final freq = provider.commandHistory.getFrequency(cmd);
+              return InputChip(
+                label: Text(
+                  '$cmd ($freq)',
+                  style: const TextStyle(fontSize: 12),
                 ),
-              ),
-            // Input row
-            Container(
+                materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                visualDensity: VisualDensity.compact,
+                deleteIcon: const Icon(Icons.close, size: 14),
+                onDeleted: () async {
+                  await provider.commandHistory.deleteCommand(cmd);
+                  setState(() {});
+                },
+                onPressed: () {
+                  _messageController.text = cmd;
+                  _messageController.selection = TextSelection.fromPosition(
+                    TextPosition(offset: cmd.length),
+                  );
+                  setState(() {});
+                  _messageFocusNode.requestFocus();
+                },
+              );
+            }).toList(),
+          ),
+        ),
+        // Input row — only rebuilds when isConnected changes
+        Selector<SerialProvider, bool>(
+          selector: (_, p) => p.isConnected,
+          builder: (context, isConnected, _) {
+            return Container(
               padding: const EdgeInsets.all(12),
               child: Row(
                 children: [
@@ -522,7 +526,7 @@ class _UartTerminalScreenState extends State<UartTerminalScreen> {
                     child: TextField(
                       controller: _messageController,
                       focusNode: _messageFocusNode,
-                      enabled: provider.isConnected,
+                      enabled: isConnected,
                       decoration: const InputDecoration(
                         hintText: 'Type message...',
                         border: OutlineInputBorder(),
@@ -537,7 +541,7 @@ class _UartTerminalScreenState extends State<UartTerminalScreen> {
                   ),
                   const SizedBox(width: 12),
                   ElevatedButton.icon(
-                    onPressed: provider.isConnected ? _sendMessage : null,
+                    onPressed: isConnected ? _sendMessage : null,
                     icon: const Icon(Icons.send),
                     label: const Text('Send'),
                     style: ElevatedButton.styleFrom(
@@ -549,10 +553,10 @@ class _UartTerminalScreenState extends State<UartTerminalScreen> {
                   ),
                 ],
               ),
-            ),
-          ],
-        );
-      },
+            );
+          },
+        ),
+      ],
     );
   }
 }
