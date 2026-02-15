@@ -15,7 +15,10 @@ class UartTerminalScreen extends StatefulWidget {
 class _UartTerminalScreenState extends State<UartTerminalScreen> {
   final TextEditingController _messageController = TextEditingController();
   final TextEditingController _customBaudController = TextEditingController();
+  final TextEditingController _filterController = TextEditingController();
   final ScrollController _scrollController = ScrollController();
+  final FocusNode _messageFocusNode = FocusNode();
+  String _filterText = '';
   
   final List<int> _commonBaudRates = [9600, 19200, 38400, 57600, 115200];
   bool _useCustomBaud = false;
@@ -24,7 +27,9 @@ class _UartTerminalScreenState extends State<UartTerminalScreen> {
   void dispose() {
     _messageController.dispose();
     _customBaudController.dispose();
+    _filterController.dispose();
     _scrollController.dispose();
+    _messageFocusNode.dispose();
     super.dispose();
   }
 
@@ -48,6 +53,7 @@ class _UartTerminalScreenState extends State<UartTerminalScreen> {
     provider.sendMessage(text);
     _messageController.clear();
     _scrollToBottom();
+    _messageFocusNode.requestFocus();
   }
 
   bool _isDesktop() {
@@ -72,7 +78,7 @@ class _UartTerminalScreenState extends State<UartTerminalScreen> {
       ),
       body: Column(
         children: [
-          // Top control bar
+          // Top control bar (includes filter)
           _buildControlBar(),
           
           const Divider(height: 1),
@@ -116,6 +122,9 @@ class _UartTerminalScreenState extends State<UartTerminalScreen> {
               
               // Status indicator
               _buildStatusIndicator(provider),
+              
+              // Filter
+              _buildFilterField(provider),
             ],
           ),
         );
@@ -304,6 +313,57 @@ class _UartTerminalScreenState extends State<UartTerminalScreen> {
     );
   }
 
+  Widget _buildFilterField(SerialProvider provider) {
+    final total = provider.messages.length;
+    final filtered = _filterText.isEmpty
+        ? total
+        : provider.messages
+            .where((m) => m.content.toLowerCase().contains(_filterText.toLowerCase()))
+            .length;
+
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        SizedBox(
+          width: 200,
+          height: 36,
+          child: TextField(
+            controller: _filterController,
+            decoration: InputDecoration(
+              hintText: 'Filter...',
+              prefixIcon: const Icon(Icons.search, size: 18),
+              prefixIconConstraints: const BoxConstraints(minWidth: 36),
+              isDense: true,
+              contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+              border: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(18),
+              ),
+              suffixIcon: _filterText.isNotEmpty
+                  ? IconButton(
+                      icon: const Icon(Icons.clear, size: 16),
+                      padding: EdgeInsets.zero,
+                      onPressed: () {
+                        _filterController.clear();
+                        setState(() => _filterText = '');
+                      },
+                    )
+                  : null,
+            ),
+            style: const TextStyle(fontSize: 13),
+            onChanged: (value) {
+              setState(() => _filterText = value);
+            },
+          ),
+        ),
+        const SizedBox(width: 8),
+        Text(
+          '$filtered/$total',
+          style: const TextStyle(fontSize: 12, color: Colors.grey),
+        ),
+      ],
+    );
+  }
+
   Widget _buildMessageLog() {
     return Consumer<SerialProvider>(
       builder: (context, provider, _) {
@@ -317,15 +377,33 @@ class _UartTerminalScreenState extends State<UartTerminalScreen> {
           );
         }
 
-        // Auto-scroll when new messages arrive
-        _scrollToBottom();
+        final filtered = _filterText.isEmpty
+            ? provider.messages
+            : provider.messages
+                .where((m) => m.content.toLowerCase().contains(_filterText.toLowerCase()))
+                .toList();
+
+        if (filtered.isEmpty) {
+          return const Center(
+            child: Text(
+              'No messages match the filter.',
+              textAlign: TextAlign.center,
+              style: TextStyle(color: Colors.grey),
+            ),
+          );
+        }
+
+        // Auto-scroll when new messages arrive (only if not filtering)
+        if (_filterText.isEmpty) {
+          _scrollToBottom();
+        }
 
         return ListView.builder(
           controller: _scrollController,
           padding: const EdgeInsets.all(8),
-          itemCount: provider.messages.length,
+          itemCount: filtered.length,
           itemBuilder: (context, index) {
-            return _buildMessageBubble(provider.messages[index]);
+            return _buildMessageBubble(filtered[index]);
           },
         );
       },
@@ -394,41 +472,88 @@ class _UartTerminalScreenState extends State<UartTerminalScreen> {
   Widget _buildInputArea() {
     return Consumer<SerialProvider>(
       builder: (context, provider, _) {
-        return Container(
-          padding: const EdgeInsets.all(12),
-          child: Row(
-            children: [
-              Expanded(
-                child: TextField(
-                  controller: _messageController,
-                  enabled: provider.isConnected,
-                  decoration: const InputDecoration(
-                    hintText: 'Type message...',
-                    border: OutlineInputBorder(),
-                    contentPadding: EdgeInsets.symmetric(
-                      horizontal: 16,
-                      vertical: 12,
+        final inputText = _messageController.text;
+        final suggestions = inputText.trim().isNotEmpty
+            ? provider.commandHistory.getSuggestions(inputText)
+            : <String>[];
+
+        return Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            // Suggestion chips
+            if (suggestions.isNotEmpty)
+              Container(
+                width: double.infinity,
+                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+                child: Wrap(
+                  spacing: 6,
+                  runSpacing: 4,
+                  children: suggestions.map((cmd) {
+                    final freq = provider.commandHistory.getFrequency(cmd);
+                    return InputChip(
+                      label: Text(
+                        '$cmd ($freq)',
+                        style: const TextStyle(fontSize: 12),
+                      ),
+                      materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                      visualDensity: VisualDensity.compact,
+                      deleteIcon: const Icon(Icons.close, size: 14),
+                      onDeleted: () async {
+                        await provider.commandHistory.deleteCommand(cmd);
+                        setState(() {});
+                      },
+                      onPressed: () {
+                        _messageController.text = cmd;
+                        _messageController.selection = TextSelection.fromPosition(
+                          TextPosition(offset: cmd.length),
+                        );
+                        setState(() {});
+                      },
+                    );
+                  }).toList(),
+                ),
+              ),
+            // Input row
+            Container(
+              padding: const EdgeInsets.all(12),
+              child: Row(
+                children: [
+                  Expanded(
+                    child: TextField(
+                      controller: _messageController,
+                      focusNode: _messageFocusNode,
+                      enabled: provider.isConnected,
+                      decoration: const InputDecoration(
+                        hintText: 'Type message...',
+                        border: OutlineInputBorder(),
+                        contentPadding: EdgeInsets.symmetric(
+                          horizontal: 16,
+                          vertical: 12,
+                        ),
+                      ),
+                      onChanged: (_) => setState(() {}),
+                      onSubmitted: (_) => _sendMessage(),
                     ),
                   ),
-                  onSubmitted: (_) => _sendMessage(),
-                ),
-              ),
-              const SizedBox(width: 12),
-              ElevatedButton.icon(
-                onPressed: provider.isConnected ? _sendMessage : null,
-                icon: const Icon(Icons.send),
-                label: const Text('Send'),
-                style: ElevatedButton.styleFrom(
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 24,
-                    vertical: 16,
+                  const SizedBox(width: 12),
+                  ElevatedButton.icon(
+                    onPressed: provider.isConnected ? _sendMessage : null,
+                    icon: const Icon(Icons.send),
+                    label: const Text('Send'),
+                    style: ElevatedButton.styleFrom(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 24,
+                        vertical: 16,
+                      ),
+                    ),
                   ),
-                ),
+                ],
               ),
-            ],
-          ),
+            ),
+          ],
         );
       },
     );
   }
 }
+

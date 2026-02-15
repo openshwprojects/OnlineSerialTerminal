@@ -4,9 +4,11 @@ import 'dart:typed_data';
 import 'package:flutter/foundation.dart';
 import '../models/uart_message.dart';
 import '../serial/serial_io.dart';
+import '../services/command_history_service.dart';
 
 class SerialProvider extends ChangeNotifier {
   final SerialTransport _transport;
+  final CommandHistoryService commandHistory = CommandHistoryService();
   StreamSubscription<Uint8List>? _dataSubscription;
   
   final List<UartMessage> _messages = [];
@@ -29,6 +31,7 @@ class SerialProvider extends ChangeNotifier {
 
   Future<void> _init() async {
     await _transport.init();
+    await commandHistory.init();
     
     // Listen to incoming data
     _dataSubscription = _transport.stream.listen(_onDataReceived);
@@ -182,6 +185,9 @@ class SerialProvider extends ChangeNotifier {
         timestamp: DateTime.now(),
         direction: MessageDirection.sent,
       ));
+      
+      // Record in history for autocomplete
+      commandHistory.addCommand(text);
     } catch (e) {
       debugPrint('Send error: $e');
     }
